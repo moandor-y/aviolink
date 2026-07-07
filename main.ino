@@ -51,53 +51,61 @@ void ProcessSentence(const String& line) {
     payload = local_line.substring(0, star_index);
   }
 
-  // Split the sentence by commas into an array
-  String tokens[15];
-  int num_tokens = SplitString(payload, ',', tokens, 15);
+  // Only tokenize and rebuild if it's GPRMC or GPVTG
+  if (payload.substring(0, 6) == "$GPRMC" || payload.substring(0, 6) == "$GPVTG") {
+    // Split the sentence by commas into an array
+    String tokens[15];
+    int num_tokens = SplitString(payload, ',', tokens, 15);
 
-  // --- INJECT MAGNETIC VARIATION INTO $GPRMC ---
-  if (tokens[0] == "$GPRMC" && num_tokens >= 12) {
-    // In RMC, index 10 is Mag Var value, index 11 is Direction (E/W)
-    tokens[10] = String(kMagVar, 1);
-    tokens[11] = kMagDir;
-  }
-  // --- INJECT MAGNETIC TRACK INTO $GPVTG ---
-  else if (tokens[0] == "$GPVTG" && num_tokens >= 9) {
-    // Index 1 is True Track, Index 3 is Mag Track
-    if (tokens[1].length() > 0) {
-      float true_track = tokens[1].toFloat();
-      float mag_track = true_track;
-
-      // Apply magnetic math
-      if (kMagDir == "W") {
-        mag_track = true_track + kMagVar;
-      } else {
-        mag_track = true_track - kMagVar;
-      }
-
-      // Wrap around 360 degrees
-      if (mag_track >= 360.0f) mag_track -= 360.0f;
-      if (mag_track < 0.0f) mag_track += 360.0f;
-
-      tokens[3] = String(mag_track, 2);  // Insert with 2 decimal places
+    // --- INJECT MAGNETIC VARIATION INTO $GPRMC ---
+    if (tokens[0] == "$GPRMC" && num_tokens >= 12) {
+      // In RMC, index 10 is Mag Var value, index 11 is Direction (E/W)
+      tokens[10] = String(kMagVar, 1);
+      tokens[11] = kMagDir;
     }
+    // --- INJECT MAGNETIC TRACK INTO $GPVTG ---
+    else if (tokens[0] == "$GPVTG" && num_tokens >= 9) {
+      // Index 1 is True Track, Index 3 is Mag Track
+      if (tokens[1].length() > 0) {
+        float true_track = tokens[1].toFloat();
+        float mag_track = true_track;
+
+        // Apply magnetic math
+        if (kMagDir == "W") {
+          mag_track = true_track + kMagVar;
+        } else {
+          mag_track = true_track - kMagVar;
+        }
+
+        // Wrap around 360 degrees
+        if (mag_track >= 360.0f) mag_track -= 360.0f;
+        if (mag_track < 0.0f) mag_track += 360.0f;
+
+        tokens[3] = String(mag_track, 2);  // Insert with 2 decimal places
+      }
+    }
+
+    // Rebuild the payload with commas
+    String new_payload = tokens[0];
+    for (int i = 1; i < num_tokens; i++) {
+      new_payload += "," + tokens[i];
+    }
+
+    // Calculate the new checksum
+    String new_sentence =
+        new_payload + "*" + CalculateChecksum(new_payload) + "\r\n";
+
+    // Broadcast to the Avionics!
+    Serial1.print(new_sentence);
+
+    // Print to USB serial so you can verify it is working
+    Serial.print("OUT: " + new_sentence);
+    return;
   }
 
-  // Rebuild the payload with commas
-  String new_payload = tokens[0];
-  for (int i = 1; i < num_tokens; i++) {
-    new_payload += "," + tokens[i];
-  }
-
-  // Calculate the new checksum
-  String new_sentence =
-      new_payload + "*" + CalculateChecksum(new_payload) + "\r\n";
-
-  // Broadcast to the Avionics!
-  Serial1.print(new_sentence);
-
-  // Print to USB serial so you can verify it is working
-  Serial.print("OUT: " + new_sentence);
+  // Pass-through case: broadcast the raw line exactly as received
+  Serial1.print(line);
+  Serial.print("OUT: " + line);
 }
 
 // --- HELPER FUNCTIONS ---

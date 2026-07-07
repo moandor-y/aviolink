@@ -1,0 +1,12 @@
+# MSVC compiler build artifacts
+*.obj
+*.exe
+*.pdb
+*.ilk
+
+# GCC / Arduino build artifacts
+*.o
+*.d
+*.bin
+*.elf
+*.hex
