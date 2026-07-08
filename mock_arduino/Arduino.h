@@ -60,6 +60,14 @@ public:
         }
     }
 
+    int toInt() const {
+      try {
+        return std::stoi(s_);
+      } catch (...) {
+        return 0;
+      }
+    }
+
     char operator[](int index) const {
         if (index < 0 || index >= length()) return '\0';
         return s_[index];

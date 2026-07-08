@@ -4,8 +4,12 @@
 constexpr int kGpsRxPin = 22;  // From MAX3232 TTL-TX (GPS incoming)
 constexpr int kGpsTxPin = 23;  // To MAX3232 TTL-RX (Avionics outgoing)
 
-constexpr float kMagVar = 4.0f;  // Madison area Magnetic Variation (~4.0 deg)
-const String kMagDir = "W";      // "W" for West, "E" for East
+#include "magnetic_variation.h"
+
+// Default fallback before GPS coordinate lock is 0.0 deg (True North)
+float current_mag_var = 0.0f;
+String current_mag_dir = "E";
+
 
 String input_buffer = "";
 
@@ -14,12 +18,17 @@ void ProcessSentence(const String& line);
 int SplitString(const String& str, char delimiter, String* tokens,
                 int max_tokens);
 String CalculateChecksum(const String& sentence);
+float ParseNmeaLatitude(const String& lat_str, const String& dir_str);
+float ParseNmeaLongitude(const String& lon_str, const String& dir_str);
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
   Serial.println("\n--- ESP32-C6 Avionics NMEA Bridge ---");
+
+  // Initialize WMM coefficients
+  magnetic_variation::Initialize();
 
   // Start Serial1 for GPS in / Avionics out (4800 baud)
   Serial1.begin(4800, SERIAL_8N1, kGpsRxPin, kGpsTxPin);
@@ -59,9 +68,26 @@ void ProcessSentence(const String& line) {
 
     // --- INJECT MAGNETIC VARIATION INTO $GPRMC ---
     if (tokens[0] == "$GPRMC" && num_tokens >= 12) {
+      // Parse coordinates to calculate actual magnetic variation
+      if (tokens[3].length() > 0 && tokens[4].length() > 0 &&
+          tokens[5].length() > 0 && tokens[6].length() > 0) {
+        float lat = ParseNmeaLatitude(tokens[3], tokens[4]);
+        float lon = ParseNmeaLongitude(tokens[5], tokens[6]);
+        float time_years = 2025.0f; // Default fallback to epoch start
+        if (tokens[9].length() == 6) {
+          int day = tokens[9].substring(0, 2).toInt();
+          int month = tokens[9].substring(2, 4).toInt();
+          int year_short = tokens[9].substring(4, 6).toInt();
+          time_years = magnetic_variation::GetDecimalYear(year_short, month, day);
+        }
+        float declination = magnetic_variation::GetDeclination(lat, lon, time_years);
+        current_mag_var = std::abs(declination);
+        current_mag_dir = (declination >= 0.0f) ? "E" : "W";
+      }
+
       // In RMC, index 10 is Mag Var value, index 11 is Direction (E/W)
-      tokens[10] = String(kMagVar, 1);
-      tokens[11] = kMagDir;
+      tokens[10] = String(current_mag_var, 1);
+      tokens[11] = current_mag_dir;
     }
     // --- INJECT MAGNETIC TRACK INTO $GPVTG ---
     else if (tokens[0] == "$GPVTG" && num_tokens >= 9) {
@@ -71,10 +97,10 @@ void ProcessSentence(const String& line) {
         float mag_track = true_track;
 
         // Apply magnetic math
-        if (kMagDir == "W") {
-          mag_track = true_track + kMagVar;
+        if (current_mag_dir == "W") {
+          mag_track = true_track + current_mag_var;
         } else {
-          mag_track = true_track - kMagVar;
+          mag_track = true_track - current_mag_var;
         }
 
         // Wrap around 360 degrees
@@ -141,4 +167,28 @@ String CalculateChecksum(const String& sentence) {
   char hex_str[3];
   snprintf(hex_str, sizeof(hex_str), "%02X", checksum);
   return String(hex_str);
+}
+
+// Parses NMEA latitude (ddmm.mmmm) into decimal degrees
+float ParseNmeaLatitude(const String& lat_str, const String& dir_str) {
+  if (lat_str.length() < 4) return 0.0f;
+  float deg = lat_str.substring(0, 2).toFloat();
+  float min = lat_str.substring(2).toFloat();
+  float val = deg + min / 60.0f;
+  if (dir_str == "S") {
+    val = -val;
+  }
+  return val;
+}
+
+// Parses NMEA longitude (dddmm.mmmm) into decimal degrees
+float ParseNmeaLongitude(const String& lon_str, const String& dir_str) {
+  if (lon_str.length() < 5) return 0.0f;
+  float deg = lon_str.substring(0, 3).toFloat();
+  float min = lon_str.substring(3).toFloat();
+  float val = deg + min / 60.0f;
+  if (dir_str == "W") {
+    val = -val;
+  }
+  return val;
 }

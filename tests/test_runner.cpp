@@ -3,6 +3,7 @@
 #include <vector>
 #include <cmath>
 #include <Arduino.h>
+#include "magnetic_variation.h"
 
 MockSerial Serial;
 MockSerial Serial1;
@@ -11,6 +12,8 @@ MockSerial Serial1;
 extern void ProcessSentence(const String& line);
 extern int SplitString(const String& str, char delimiter, String* tokens, int max_tokens);
 extern String CalculateChecksum(const String& sentence);
+extern float current_mag_var;
+extern String current_mag_dir;
 
 int tests_run = 0;
 int tests_failed = 0;
@@ -54,9 +57,10 @@ void test_SplitString() {
 void test_ProcessSentence_GPRMC() {
     std::cout << "\nRunning test_ProcessSentence_GPRMC..." << std::endl;
     Serial1.clear();
-    // GPRMC input: $GPRMC,081836,A,3751.65,S,14507.36,E,000.0,360.0,130998,011.3,E*62
-    // We expect the magnetic variation (index 10) to be replaced with 4.0 and direction (index 11) to be W.
-    // The rebuilt sentence should be: $GPRMC,081836,A,3751.65,S,14507.36,E,000.0,360.0,130998,4.0,W*<new_checksum>
+    // GPRMC input uses real-world coordinates for Melbourne, Australia (37°51.65' S, 145°07.36' E).
+    // GPS Date: 130998 (13 Sep 1998) -> maps to 2098 decimal year -> clamped to WMM-2025 epoch end (2030.0).
+    // We expect declination at (37.86° S, 145.12° E) in 2030.0 to be computed dynamically as 12.2° E.
+    // Rebuilt sentence should be: $GPRMC,081836,A,3751.65,S,14507.36,E,000.0,360.0,130998,12.2,E*<new_checksum>
     String input = "$GPRMC,081836,A,3751.65,S,14507.36,E,000.0,360.0,130998,011.3,E*62\r\n";
     ProcessSentence(input);
     
@@ -73,8 +77,73 @@ void test_ProcessSentence_GPRMC() {
         verify(star != std::string::npos, "Output sentence should contain '*'");
         if (star != std::string::npos) {
             std::string payload = output.substr(0, star);
-            std::string expected_payload = "$GPRMC,081836,A,3751.65,S,14507.36,E,000.0,360.0,130998,4.0,W";
+            std::string expected_payload = "$GPRMC,081836,A,3751.65,S,14507.36,E,000.0,360.0,130998,12.2,E";
             verify(payload == expected_payload, "Payload should be modified: expected '" + expected_payload + "', got '" + payload + "'");
+            
+            std::string checksum = output.substr(star + 1);
+            String mock_payload(payload);
+            std::string expected_checksum = CalculateChecksum(mock_payload).c_str();
+            verify(checksum == expected_checksum, "Checksum should be correct: expected '" + expected_checksum + "', got '" + checksum + "'");
+        }
+    }
+}
+
+void test_ProcessSentence_GPRMC_Seattle() {
+    std::cout << "\nRunning test_ProcessSentence_GPRMC_Seattle..." << std::endl;
+    Serial1.clear();
+    // GPRMC input uses real-world coordinates for Seattle, WA, USA (47°36.37' N, 122°19.93' W).
+    // GPS Date: 130998 (13 Sep 1998) -> maps to 2098 decimal year -> clamped to WMM-2025 epoch end (2030.0).
+    String input = "$GPRMC,081836,A,4736.37,N,12219.93,W,000.0,360.0,130998,011.3,E*6A\r\n";
+    ProcessSentence(input);
+
+    verify(!Serial1.printed_lines.empty(), "Serial1 should output a sentence");
+    if (!Serial1.printed_lines.empty()) {
+        std::string output = Serial1.printed_lines[0];
+        if (output.length() >= 2 && output.substr(output.length() - 2) == "\r\n") {
+            output = output.substr(0, output.length() - 2);
+        }
+        
+        size_t star = output.find('*');
+        verify(star != std::string::npos, "Output sentence should contain '*'");
+        if (star != std::string::npos) {
+            std::string payload = output.substr(0, star);
+            std::cout << "  [INFO] Seattle parsed GPRMC: " << payload << std::endl;
+            
+            std::string expected_payload = "$GPRMC,081836,A,4736.37,N,12219.93,W,000.0,360.0,130998,14.5,E";
+            verify(payload == expected_payload, "Payload should match Seattle expected variation: expected '" + expected_payload + "', got '" + payload + "'");
+            
+            std::string checksum = output.substr(star + 1);
+            String mock_payload(payload);
+            std::string expected_checksum = CalculateChecksum(mock_payload).c_str();
+            verify(checksum == expected_checksum, "Checksum should be correct: expected '" + expected_checksum + "', got '" + checksum + "'");
+        }
+    }
+}
+
+void test_ProcessSentence_GPRMC_Boston() {
+    std::cout << "\nRunning test_ProcessSentence_GPRMC_Boston..." << std::endl;
+    Serial1.clear();
+    // GPRMC input uses real-world coordinates for Boston, MA, USA (42°21.61' N, 71°03.53' W).
+    // GPS Date: 130998 (13 Sep 1998) -> maps to 2098 decimal year -> clamped to WMM-2025 epoch end (2030.0).
+    String input = "$GPRMC,081836,A,4221.61,N,07103.53,W,000.0,360.0,130998,011.3,E*6F\r\n";
+    ProcessSentence(input);
+
+    verify(!Serial1.printed_lines.empty(), "Serial1 should output a sentence");
+    if (!Serial1.printed_lines.empty()) {
+        std::string output = Serial1.printed_lines[0];
+        if (output.length() >= 2 && output.substr(output.length() - 2) == "\r\n") {
+            output = output.substr(0, output.length() - 2);
+        }
+        
+        size_t star = output.find('*');
+        verify(star != std::string::npos, "Output sentence should contain '*'");
+        if (star != std::string::npos) {
+            std::string payload = output.substr(0, star);
+            std::cout << "  [INFO] Boston parsed GPRMC: " << payload << std::endl;
+            
+            // Expected payload variation value will be updated with the output from WMM_Tiny
+            std::string expected_payload = "$GPRMC,081836,A,4221.61,N,07103.53,W,000.0,360.0,130998,13.7,W";
+            verify(payload == expected_payload, "Payload should match Boston expected variation: expected '" + expected_payload + "', got '" + payload + "'");
             
             std::string checksum = output.substr(star + 1);
             String mock_payload(payload);
@@ -87,6 +156,10 @@ void test_ProcessSentence_GPRMC() {
 void test_ProcessSentence_GPVTG() {
     std::cout << "\nRunning test_ProcessSentence_GPVTG..." << std::endl;
     
+    // Explicitly set state to Melbourne variation for these track calculation tests
+    current_mag_var = 12.15f;
+    current_mag_dir = "E";
+
     // Case 1: True track 360.0. Magnetic direction W, kMagVar 4.0.
     // mag_track = true_track + 4.0 = 364.0 -> wraps to 4.0.
     // Expect index 3 to be 4.00.
@@ -97,7 +170,7 @@ void test_ProcessSentence_GPVTG() {
         verify(!Serial1.printed_lines.empty(), "Serial1 should output a sentence (Case 1)");
         if (!Serial1.printed_lines.empty()) {
             std::string output = Serial1.printed_lines[0];
-            verify(output.find("4.00,M") != std::string::npos, "Should inject 4.00 for Mag Track: got '" + output + "'");
+            verify(output.find("347.85,M") != std::string::npos, "Should inject 347.85 for Mag Track: got '" + output + "'");
         }
     }
 
@@ -111,7 +184,7 @@ void test_ProcessSentence_GPVTG() {
         verify(!Serial1.printed_lines.empty(), "Serial1 should output a sentence (Case 2)");
         if (!Serial1.printed_lines.empty()) {
             std::string output = Serial1.printed_lines[0];
-            verify(output.find("184.00,M") != std::string::npos, "Should inject 184.00 for Mag Track: got '" + output + "'");
+            verify(output.find("167.85,M") != std::string::npos, "Should inject 167.85 for Mag Track: got '" + output + "'");
         }
     }
 
@@ -175,9 +248,14 @@ int main() {
               << "       RUNNING NATIVE UNIT TESTS        \n"
               << "========================================" << std::endl;
 
+    // Initialize WMM coefficients
+    magnetic_variation::Initialize();
+
     test_CalculateChecksum();
     test_SplitString();
     test_ProcessSentence_GPRMC();
+    test_ProcessSentence_GPRMC_Seattle();
+    test_ProcessSentence_GPRMC_Boston();
     test_ProcessSentence_GPVTG();
     test_ProcessSentence_PassThrough();
     test_ProcessSentence_ExactPassThrough();
