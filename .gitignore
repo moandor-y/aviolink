@@ -10,3 +10,7 @@
 *.bin
 *.elf
 *.hex
+
+# Native run_tests binary
+tests/run_tests
+
